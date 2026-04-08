@@ -171,7 +171,7 @@ help() {
 	local help
 	read -r -d '' help << EOM
 Usage: $0 [-adhnrsvzZ] imagefile.img [newimagefile.img]
-
+  -m  SIZE   Minimum partition size in GB (e.g. -m 50)
   -s         Don't expand filesystem when image is booted the first time
   -v         Be verbose
   -n         Disable automatic update checking
@@ -192,9 +192,10 @@ repair=false
 parallel=false
 verbose=false
 ziptool=""
-
+minpartsize=""
 while getopts ":adnhrsvzZ" opt; do
   case "${opt}" in
+	m) minpartsize="$OPTARG";;
     a) parallel=true;;
     d) debug=true;;
     n) update_check=false;;
@@ -345,6 +346,16 @@ if ! minsize=$(resize2fs -P "$loopback"); then
 fi
 minsize=$(cut -d ':' -f 2 <<< "$minsize" | tr -d ' ')
 logVariables $LINENO currentsize minsize
+if [[ -n "$minpartsize" ]]; then
+  minsize_bytes=$(( minpartsize * 1024 * 1024 * 1024 ))
+  minsize_blocks=$(( minsize_bytes / blocksize ))
+  if [[ $minsize_blocks -gt $minsize ]]; then
+    info "Applying user-defined minimum size of ${minpartsize}GB ($minsize_blocks blocks)"
+    minsize=$minsize_blocks
+  else
+    info "Filesystem minimum ($minsize blocks) already larger than ${minpartsize}GB, ignoring -m"
+  fi
+fi
 if [[ $currentsize -eq $minsize ]]; then
   info "Filesystem already shrunk to smallest size. Skipping filesystem shrinking"
 else
