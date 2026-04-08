@@ -193,7 +193,7 @@ parallel=false
 verbose=false
 ziptool=""
 minpartsize=""
-while getopts ":admnhrsvzZ" opt; do
+while getopts ":adm:nhrsvzZ" opt; do
   case "${opt}" in
 	m) minpartsize="$OPTARG";;
     a) parallel=true;;
