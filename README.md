@@ -55,7 +55,7 @@ If you are on Debian/Ubuntu you can install all the packages you would need by r
 Run the block below to install PiShrink onto your system.
 
 ```bash
-wget https://raw.githubusercontent.com/Drewsif/PiShrink/master/pishrink.sh
+wget https://raw.githubusercontent.com/adrianoord/PiShrink/master/pishrink.sh
 chmod +x pishrink.sh
 sudo mv pishrink.sh /usr/local/bin
 ```
