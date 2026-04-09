@@ -103,20 +103,47 @@ cat <<'EOFRC' > "$mountdir/etc/rc.local"
 #!/bin/bash
 ## PiShrink https://github.com/Drewsif/PiShrink ##
 do_expand_rootfs() {
-  ROOT_PART=$(mount | sed -n 's|^/dev/\(.*\) on / .*|\1|p')
+  ROOT_SOURCE=$(findmnt -n -o SOURCE /)
+  ROOT_DEVICE=$(readlink -f "$ROOT_SOURCE")
 
-  PART_NUM=${ROOT_PART#mmcblk0p}
-  if [ "$PART_NUM" = "$ROOT_PART" ]; then
-    echo "$ROOT_PART is not an SD card. Don't know how to expand"
-    return 0
+  if [ -z "$ROOT_DEVICE" ] || [ ! -b "$ROOT_DEVICE" ]; then
+    echo "Unable to resolve root block device from $ROOT_SOURCE"
+    return 1
   fi
 
+  ROOT_DISK_NAME=$(lsblk -no PKNAME "$ROOT_DEVICE" 2>/dev/null | head -n 1)
+  PART_NUM=$(lsblk -no PARTNUM "$ROOT_DEVICE" 2>/dev/null | head -n 1)
+
+  if [ -z "$ROOT_DISK_NAME" ] || [ -z "$PART_NUM" ]; then
+    echo "Unable to determine disk or partition number for $ROOT_DEVICE"
+    return 1
+  fi
+
+  ROOT_DISK="/dev/$ROOT_DISK_NAME"
+
   # Get the starting offset of the root partition
-  PART_START=$(parted /dev/mmcblk0 -ms unit s p | grep "^${PART_NUM}" | cut -f 2 -d: | sed 's/[^0-9]//g')
+  PART_START=$(parted "$ROOT_DISK" -ms unit s p | grep "^${PART_NUM}:" | cut -f 2 -d: | sed 's/[^0-9]//g')
   [ "$PART_START" ] || return 1
+
+  # Limit the root partition size based on the real device size.
+  DISK_SIZE=$(parted "$ROOT_DISK" -ms unit s p | grep "^${ROOT_DISK}:" | cut -f 2 -d: | sed 's/[^0-9]//g')
+  DISK_THRESHOLD=$((65 * 1024 * 1024 * 1024 / 512))
+  if [ "$DISK_SIZE" -lt "$DISK_THRESHOLD" ]; then
+    MAX_PART_SIZE_MIB=$((48 * 1024))
+  else
+    MAX_PART_SIZE_MIB=$((85 * 1024))
+  fi
+
+  # Calculate end sector using the selected maximum size.
+  PART_END=""
+  PART_END=$((PART_START + (MAX_PART_SIZE_MIB * 1024 * 1024 / 512) - 1))
+  if [ "$PART_END" -ge "$DISK_SIZE" ]; then
+    PART_END=""
+  fi
+
   # Return value will likely be error for fdisk as it fails to reload the
   # partition table because the root fs is mounted
-  fdisk /dev/mmcblk0 <<EOF
+  fdisk "$ROOT_DISK" <<EOF
 p
 d
 $PART_NUM
@@ -124,15 +151,15 @@ n
 p
 $PART_NUM
 $PART_START
-
+$PART_END
 p
 w
 EOF
 
 cat <<EOF > /etc/rc.local &&
 #!/bin/sh
-echo "Expanding /dev/$ROOT_PART"
-resize2fs /dev/$ROOT_PART
+echo "Expanding $ROOT_DEVICE"
+resize2fs "$ROOT_DEVICE"
 rm -f /etc/rc.local; cp -fp /etc/rc.local.bak /etc/rc.local && /etc/rc.local
 
 EOF
@@ -149,9 +176,6 @@ else
   exit
 fi
 }
-raspi_config_expand
-echo "WARNING: Using backup expand..."
-sleep 5
 do_expand_rootfs
 echo "ERROR: Expanding failed..."
 sleep 5
@@ -161,7 +185,6 @@ if [[ -f /etc/rc.local.bak ]]; then
 fi
 exit 0
 EOFRC
-
     chmod +x "$mountdir/etc/rc.local"
     fi
     umount "$mountdir"
@@ -171,7 +194,7 @@ help() {
 	local help
 	read -r -d '' help << EOM
 Usage: $0 [-adhnrsvzZ] imagefile.img [newimagefile.img]
-  -m  SIZE   Minimum partition size in GB (e.g. -m 50)
+
   -s         Don't expand filesystem when image is booted the first time
   -v         Be verbose
   -n         Disable automatic update checking
@@ -192,10 +215,9 @@ repair=false
 parallel=false
 verbose=false
 ziptool=""
-minpartsize=""
-while getopts ":adm:nhrsvzZ" opt; do
+
+while getopts ":adnhrsvzZ" opt; do
   case "${opt}" in
-	m) minpartsize="$OPTARG";;
     a) parallel=true;;
     d) debug=true;;
     n) update_check=false;;
@@ -346,16 +368,6 @@ if ! minsize=$(resize2fs -P "$loopback"); then
 fi
 minsize=$(cut -d ':' -f 2 <<< "$minsize" | tr -d ' ')
 logVariables $LINENO currentsize minsize
-if [[ -n "$minpartsize" ]]; then
-  minsize_bytes=$(( minpartsize * 1024 * 1024 * 1024 ))
-  minsize_blocks=$(( minsize_bytes / blocksize ))
-  if [[ $minsize_blocks -gt $minsize ]]; then
-    info "Applying user-defined minimum size of ${minpartsize}GB ($minsize_blocks blocks)"
-    minsize=$minsize_blocks
-  else
-    info "Filesystem minimum ($minsize blocks) already larger than ${minpartsize}GB, ignoring -m"
-  fi
-fi
 if [[ $currentsize -eq $minsize ]]; then
   info "Filesystem already shrunk to smallest size. Skipping filesystem shrinking"
 else
